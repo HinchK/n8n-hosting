@@ -12,9 +12,11 @@ Tiers below map to the equivalent [`terraform-aws-n8n`](https://github.com/n8n-i
 |---|---|---|
 | `n8n-w-multimain-queuemode.yaml` | Dev, small, or cost-sensitive. Multi-main + queue mode on a single RDS instance. | Small (sized up = Medium) |
 | `n8n-w-multimain-queuemode-webhooks.yaml` | Production with real webhook load. Adds a dedicated webhook tier, queue-depth worker autoscaling, request-rate webhook autoscaling, and DB / Redis / graceful-shutdown / readiness hardening. | Medium |
-| `n8n-w-multimain-queuemode-webhooks-ha.yaml` | Failover-sensitive production. Aurora PostgreSQL (writer + reader, ~6s failover vs ~3 min on single RDS), Redis Multi-AZ, higher floors, larger tasks. | Large (architecture parity) |
+| `n8n-w-multimain-queuemode-webhooks-ha.yaml` | Failover-sensitive production. Aurora PostgreSQL, **experimental**, see below (writer + reader, ~6s failover vs ~3 min on single RDS), Redis Multi-AZ, higher floors, larger tasks. | Large (architecture parity) |
 
 > Heads up: these templates use **Enterprise-licensed** n8n features (multi-main and S3 external storage), so the stack will not start without a valid `N8nLicenseKey`. The placeholder default is there for inspection only.
+
+> Aurora is experimental: the HA template runs Aurora PostgreSQL for its faster failover. Aurora is PostgreSQL-compatible rather than upstream PostgreSQL, so n8n does not test or certify it and the Postgres version policy does not cover it. The other two templates run RDS PostgreSQL, which does.
 
 ## Architecture
 
@@ -23,7 +25,7 @@ Every template deploys:
 - An internet-facing Application Load Balancer with an HTTPS listener and HTTP-to-HTTPS redirect.
 - An ECS Fargate service for n8n main tasks behind the load balancer.
 - An ECS Fargate service for n8n worker tasks that consume jobs from Redis.
-- Amazon RDS PostgreSQL (or Aurora, on the HA tier) for the n8n database.
+- Amazon RDS PostgreSQL for the n8n database, or Aurora PostgreSQL (experimental) on the HA tier.
 - Amazon ElastiCache Redis for queue mode.
 - Amazon S3 for binary data storage.
 - Secrets Manager secrets for the n8n license, encryption key, database credentials, and Redis password.
@@ -107,7 +109,7 @@ For production changes, create and review a CloudFormation change set in a non-p
 
 The templates pin the database engine and the n8n image directly in the resource definitions (they are not stack parameters), so new stacks deploy on known-good versions. If you are updating a stack created from an earlier version of the base template, review the change set first, these pins can force a modify or a downgrade:
 
-- **RDS `EngineVersion` `16` -> `16.9`**: `EngineVersion` is a hardcoded property on the RDS resource in the template, not a stack parameter you can override at update time, so edit the value in the template before deploying the change set. Applying `16.9` forces an engine modify and reboot on the single RDS instance. If `AutoMinorVersionUpgrade` already moved the instance past `16.9`, CloudFormation cannot apply a lower version and the update rolls back, so set the template's `EngineVersion` to the version the instance is actually on (or higher) before updating.
+- **RDS / Aurora `EngineVersion` `16.x` -> `18.4`**: a **major** engine upgrade, so follow the AWS guide, [RDS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_UpgradeDBInstance.PostgreSQL.html) or [Aurora](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/USER_UpgradeDBInstance.PostgreSQL.html) for the HA tier. `16.9` upgrades directly to `18.4` on both, no intermediate version. Two things that guide cannot tell you: `EngineVersion` is a hardcoded property here rather than a stack parameter, so edit it in the template before deploying the change set, and CloudFormation cannot apply a version below the one the instance is already on, so if `AutoMinorVersionUpgrade` moved it past the pin the update rolls back. To stay put, pin `17.x` or `16.x`, both are within n8n's compatibility range.
 - **n8n image `latest` -> a pinned tag**: the image tag is likewise hardcoded in the container definitions, not a parameter. A stack that already pulled a newer n8n and ran its database migrations will crash-loop if the pin resolves to an older image, because n8n does not down-migrate the schema. Edit the tag to the version currently running (or newer), never older.
 
 New stacks are unaffected, they start directly on the pinned versions.
